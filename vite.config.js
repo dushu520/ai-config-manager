@@ -3,6 +3,7 @@ import react from '@vitejs/plugin-react'
 import express from 'express'
 import cors from 'cors'
 import fs from 'fs'
+import os from 'os'
 import path from 'path'
 import { fileURLToPath } from 'url'
 
@@ -93,6 +94,32 @@ export default defineConfig({
         const api = express()
         api.use(cors())
         api.use(express.json())
+
+        // 获取编辑器配置列表
+        api.get('/api/editors', (req, res) => {
+          try {
+            const editorsPath = path.join(__dirname, 'editors.json')
+            const content = fs.readFileSync(editorsPath, 'utf-8')
+            const home = os.homedir()
+            const resolved = JSON.parse(content)
+            // 递归替换路径中的 ${HOME}
+            function resolveHome(obj) {
+              if (typeof obj === 'string') return obj.replace(/\$\{HOME\}/g, home)
+              if (Array.isArray(obj)) return obj.map(resolveHome)
+              if (typeof obj === 'object' && obj !== null) {
+                const result = {}
+                for (const [key, value] of Object.entries(obj)) {
+                  result[key] = resolveHome(value)
+                }
+                return result
+              }
+              return obj
+            }
+            return res.json(resolveHome(resolved))
+          } catch (error) {
+            return res.status(500).json({ error: error.message })
+          }
+        })
 
         api.get('/api/config', (req, res) => {
           const { path: configPath, file } = req.query

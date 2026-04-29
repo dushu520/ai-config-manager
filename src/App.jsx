@@ -3,17 +3,6 @@ import { Settings2, Save, Check, X, Plus, Trash2, Edit3 } from 'lucide-react';
 
 const API = '/api/config';
 
-const EDITORS = {
-  ubuntu: [
-    { name: 'qwen', path: '/home/yufang/.qwen/', file: 'settings.json', type: 'qwen' },
-    { name: 'codex', path: '/home/yufang/.codex/', authFile: 'auth.json', file: 'config.toml', type: 'codex' },
-    { name: 'claude-code', path: '/home/yufang/.claude/', file: 'settings.json', type: 'qwen' },
-  ],
-  host: [
-    { name: 'opencode', path: '/home/yufang/.config/opencode/', file: 'config.yaml', type: 'opencode' },
-  ]
-};
-
 function parseQwen(data) {
   const env = { ...(data.env || {}) };
   const models = [];
@@ -80,8 +69,9 @@ async function serializeCodex(editor, config) {
 }
 
 export default function App() {
-  const [host, setHost] = useState('ubuntu');
-  const [editorName, setEditorName] = useState('qwen');
+  const [editors, setEditors] = useState({});
+  const [host, setHost] = useState('');
+  const [editorName, setEditorName] = useState('');
   const [config, setConfig] = useState({ env: {}, models: [] });
   const [saveStatus, setSaveStatus] = useState('idle');
   const [loading, setLoading] = useState(true);
@@ -95,7 +85,27 @@ export default function App() {
   const [envFilter, setEnvFilter] = useState(null);
   const [deleteConfirm, setDeleteConfirm] = useState(null);
 
-  const editor = EDITORS[host]?.find(e => e.name === editorName);
+  // 加载编辑器配置
+  const loadEditors = async () => {
+    try {
+      const res = await fetch('/api/editors');
+      const data = await res.json();
+      setEditors(data);
+      // 设置默认选择项
+      const hosts = Object.keys(data);
+      if (hosts.length > 0 && !host) {
+        setHost(hosts[0]);
+        const firstEditor = data[hosts[0]]?.[0];
+        if (firstEditor) setEditorName(firstEditor.name);
+      }
+    } catch (err) {
+      setError('加载编辑器配置失败: ' + err.message);
+    }
+  };
+
+  useEffect(() => { loadEditors(); }, []);
+
+  const editor = editors[host]?.find(e => e.name === editorName);
 
   const loadConfig = async () => {
     if (!editor) return;
@@ -119,7 +129,7 @@ export default function App() {
     setLoading(false);
   };
 
-  useEffect(() => { loadConfig(); }, [host, editorName]);
+  useEffect(() => { loadConfig(); }, [host, editorName, editors]);
 
   const doSave = async (cfg) => {
     if (!editor) return;
@@ -267,14 +277,14 @@ export default function App() {
 
         <div className="mb-6 text-sm text-text-secondary flex items-center gap-2 flex-wrap">
           <span>配置:</span>
-          <select value={host} onChange={e => { setHost(e.target.value); setEditorName(EDITORS[e.target.value]?.[0]?.name || ''); }}
+          <select value={host} onChange={e => { setHost(e.target.value); setEditorName(editors[e.target.value]?.[0]?.name || ''); }}
             className="bg-bg-secondary border border-border rounded px-2 py-1 text-text-primary">
-            {Object.keys(EDITORS).map(h => <option key={h} value={h}>{h}</option>)}
+            {Object.keys(editors).map(h => <option key={h} value={h}>{h}</option>)}
           </select>
           <span>/</span>
           <select value={editorName} onChange={e => setEditorName(e.target.value)}
             className="bg-bg-secondary border border-border rounded px-2 py-1 text-text-primary">
-            {(EDITORS[host] || []).map(e => <option key={e.name} value={e.name}>{e.name}</option>)}
+            {(editors[host] || []).map(e => <option key={e.name} value={e.name}>{e.name}</option>)}
           </select>
           <span className="text-text-secondary/50">→</span>
           <code className="text-accent font-mono text-xs">{editor?.path}{editor?.file}</code>

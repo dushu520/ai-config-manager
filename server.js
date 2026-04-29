@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -17,6 +18,32 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, 'dist')));
 
 // ============ API ============
+
+// 获取编辑器配置列表
+app.get('/api/editors', (req, res) => {
+  try {
+    const editorsPath = path.join(__dirname, 'editors.json');
+    const content = fs.readFileSync(editorsPath, 'utf-8');
+    const home = os.homedir();
+    const resolved = JSON.parse(content);
+    // 递归替换路径中的 ${HOME}
+    function resolveHome(obj) {
+      if (typeof obj === 'string') return obj.replace(/\$\{HOME\}/g, home);
+      if (Array.isArray(obj)) return obj.map(resolveHome);
+      if (typeof obj === 'object' && obj !== null) {
+        const result = {};
+        for (const [key, value] of Object.entries(obj)) {
+          result[key] = resolveHome(value);
+        }
+        return result;
+      }
+      return obj;
+    }
+    return res.json(resolveHome(resolved));
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+});
 
 // 读取配置文件
 app.get('/api/config', (req, res) => {
