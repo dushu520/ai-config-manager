@@ -239,19 +239,41 @@ export default function App() {
 
   const handleAddModel = () => {
     if (selectedModel) {
-      setEditingModel({ ...selectedModel });
+      setEditingModel({ ...selectedModel, name: autoGenName(selectedModel.id, selectedModel.envKey) });
     } else {
       setEditingModel({ id: '', name: '', provider: 'openai', baseUrl: 'https://api.openai.com/v1', envKey: '' });
     }
   };
 
-  // 复制模型时，如果用户修改了 id，name 同步更新
+  // 根据 modelId 和 envKey 自动生成名称
+  const autoGenName = (modelId, envKey) => {
+    const modelName = modelId ? modelId.split('/').pop() : '';
+    let source = '';
+    if (envKey) {
+      source = envKey.replace(/_?API_?KEY$/i, '').replace(/_/g, '-');
+      if (source) source = source.charAt(0).toUpperCase() + source.slice(1);
+    }
+    const name = [source, modelName].filter(Boolean).join('-');
+    return name;
+  };
+
+  // modelId 变化时，同步更新 name
   const handleEditingModelIdChange = (e) => {
     const newId = e.target.value;
     setEditingModel(p => ({
       ...p,
       id: newId,
-      name: (p.name === '' || p.name === p.id) ? newId : p.name
+      name: autoGenName(newId, p.envKey || '')
+    }));
+  };
+
+  // envKey 变化时，同步更新 name
+  const handleEditingModelEnvKeyChange = (e) => {
+    const newEnvKey = e.target.value;
+    setEditingModel(p => ({
+      ...p,
+      envKey: newEnvKey,
+      name: autoGenName(p.id || '', newEnvKey)
     }));
   };
 
@@ -404,10 +426,10 @@ export default function App() {
                             className="w-full bg-bg-primary border border-border rounded px-2 py-1 text-sm font-mono text-text-primary" />
                         </div>
                       </div>
-                      <div><label className="block text-xs text-text-secondary mb-1">名称</label><input type="text" value={editingModel.name || ''} onChange={e => setEditingModel(p => ({ ...p, name: e.target.value }))} className="w-full bg-bg-primary border border-border rounded px-2 py-1 text-sm font-mono text-text-primary" /></div>
+                      <div><label className="block text-xs text-text-secondary mb-1">名称 <span className="text-text-secondary/40 text-[10px]">（自动生成）</span></label><input type="text" value={editingModel.name || ''} readOnly className="w-full bg-bg-tertiary border border-border rounded px-2 py-1 text-sm font-mono text-text-primary cursor-not-allowed opacity-70" /></div>
                       <div><label className="block text-xs text-text-secondary mb-1">Base URL</label><input type="text" value={editingModel.baseUrl || ''} onChange={e => setEditingModel(p => ({ ...p, baseUrl: e.target.value }))} className="w-full bg-bg-primary border border-border rounded px-2 py-1 text-sm font-mono text-accent" /></div>
                       <div><label className="block text-xs text-text-secondary mb-1">环境变量 Key</label>
-                        <select value={editingModel.envKey || ''} onChange={e => setEditingModel(p => ({ ...p, envKey: e.target.value }))} className="w-full bg-bg-primary border border-border rounded px-2 py-1 text-sm font-mono text-warning">
+                        <select value={editingModel.envKey || ''} onChange={handleEditingModelEnvKeyChange} className="w-full bg-bg-primary border border-border rounded px-2 py-1 text-sm font-mono text-warning">
                           <option value="">-- 选择环境变量 --</option>
                           {envEntries.map(([key]) => <option key={key} value={key}>{key}</option>)}
                         </select>
@@ -422,7 +444,7 @@ export default function App() {
                   <>
                     <div className="px-4 py-3 bg-bg-tertiary/50 border-b border-border flex items-center justify-between flex-shrink-0">
                       <h3 className="font-medium text-text-primary text-sm">模型详情</h3>
-                      <button onClick={() => setEditingModel({ ...selectedModel, originalId: selectedModel.id })} className="text-xs text-accent hover:text-accent/80">编辑</button>
+                      <button onClick={() => setEditingModel({ ...selectedModel, name: autoGenName(selectedModel.id, selectedModel.envKey), originalId: selectedModel.id })} className="text-xs text-accent hover:text-accent/80">编辑</button>
                     </div>
                     <div className="p-4 space-y-2 flex-1 overflow-y-auto">
                       <div className="grid grid-cols-2 gap-2 text-sm">
