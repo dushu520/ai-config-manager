@@ -1,10 +1,4 @@
 {
-  "ubuntu": [
-    { "name": "qwen", "path": "${HOME}/.qwen/", "file": "settings.json", "type": "qwen" },
-    { "name": "codex", "path": "${HOME}/.codex/", "authFile": "auth.json", "file": "config.toml", "type": "codex" },
-    { "name": "claude-code", "path": "${HOME}/.claude/", "file": "settings.json", "type": "qwen" }
-  ],
-  "host": [
-    { "name": "opencode", "path": "${HOME}/.config/opencode/", "file": "config.yaml", "type": "opencode" }
-  ]
+  "ubuntu": ["qwen", "codex", "claude-code"],
+  "host": ["qwen", "codex"]
 }
