@@ -374,7 +374,7 @@ export default function App() {
               <div className="flex-1 flex flex-col">
                 {editingModel ? (
                   <>
-                    <div className="px-4 py-3 bg-bg-tertiary/50 border-b border-border flex-shrink-0"><h3 className="font-medium text-text-primary text-sm">编辑模型</h3></div>
+                    <div className="px-4 py-3 bg-bg-tertiary/50 border-b border-border flex-shrink-0"><h3 className="font-medium text-text-primary text-sm">{editingModel.originalId !== undefined ? '编辑模型' : '添加模型'}</h3></div>
                     <div className="p-4 space-y-3 flex-1 overflow-y-auto">
                       <div className="grid grid-cols-2 gap-3">
                         <div><label className="block text-xs text-text-secondary mb-1">Provider</label>
