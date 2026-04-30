@@ -1,0 +1,4 @@
+{
+  "ubuntu": ["qwen", "codex", "claude-code"],
+  "host": ["qwen", "codex"]
+}

@@ -1,100 +1,70 @@
 # AI Config Manager
 
-终端风格配置管理器，通过元配置文件统一管理多系统、多编辑器的配置文件。
+终端风格 AI 工具配置管理器，通过 `editors.json` 元配置统一管理多系统、多编辑器（Qwen / Codex / Claude Code）的配置文件。
 
-## 功能特性
+## 功能
 
-- 多系统/编辑器配置统一管理
-- 环境变量增删改查
-- 模型列表管理 (支持 OpenAI/Anthropic)
-- 实时保存与状态反馈
+- 🖥️ 多系统支持 — Ubuntu / Host（含 WSL 环境自动检测）
+- ✏️ 环境变量增删改查
+- 📋 模型列表管理（支持 OpenAI / Anthropic 多 Provider）
+- 🔄 实时保存，状态反馈
+- 🎨 暗色终端风格 UI
 
 ## 支持的编辑器
 
-| 系统 | 编辑器 | 配置文件 |
-|------|--------|----------|
-| ubuntu | qwen | `~/.qwen/settings.json` |
-| ubuntu | codex | `~/.codex/auth.json`, `config.toml` |
-| ubuntu | claude-code | `~/.claude/settings.json` |
-| host | opencode | `~/.config/opencode/config.yaml` |
+| Host   | 编辑器       | 配置文件                          |
+|--------|-------------|----------------------------------|
+| ubuntu | qwen        | `~/.qwen/settings.json`          |
+| ubuntu | codex       | `~/.codex/auth.json` + `config.toml` |
+| ubuntu | claude-code | `~/.claude/settings.json`        |
+| host   | qwen        | `~/ .qwen/settings.json`         |
+| host   | codex       | `~/ .codex/auth.json` + `config.toml` |
 
-## 部署方法
+> `host` 在 WSL 环境下自动映射到 Windows 用户目录（`/mnt/c/Users/<用户名>/`）。
 
-### 环境要求
+## 环境要求
 
 - Node.js >= 18
-- npm/pnpm
+- npm
 
-### 安装与启动
+## 安装与启动
 
 ```bash
-# 克隆项目
-git clone https://github.com/yufang/ai-config-manager.git
+git clone https://github.com/dushu520/ai-config-manager.git
 cd ai-config-manager
-
-# 安装依赖
 npm install
 
-# 开发模式
+# 开发模式（Vite + 内置 API）
 npm run dev
 
-# 构建生产版
+# 生产构建 + 启动
 npm run build
-
-# 启动生产服务器
 npm start
 ```
 
-### Docker 部署
-
-```bash
-# 构建镜像
-docker build -t ai-config-manager .
-
-# 运行容器
-docker run -d -p 3101:3101 --name ai-config-manager ai-config-manager
-```
-
-### docker-compose
-
-```bash
-docker-compose up -d
-```
-
-## 默认端口
-
-- 应用端口: `3101`
-- 访问地址: http://localhost:3101
+应用默认运行在 http://localhost:3101。
 
 ## 项目结构
 
 ```
 ├── src/
-│   ├── App.jsx      # 主应用组件
-│   ├── main.jsx     # 入口
-│   └── index.css    # 样式
-├── server.js        # Express 后端
+│   ├── App.jsx            # 主应用组件（环境变量 & 模型管理）
+│   ├── main.jsx           # React 入口
+│   └── index.css          # Tailwind 样式
+├── editors.json           # 编辑器名称映射（按 host 分组）
+├── server.js              # Express 生产服务器
+├── vite.config.js         # Vite 配置（含内置 API 插件 & WSL 支持）
 ├── package.json
-└── vite.config.js   # Vite 配置
+└── tailwind.config.js
 ```
 
-## API 接口
+## API
 
-### GET /api/config
-读取配置文件
-```
-/api/config?path=/home/user/.config/&file=settings.json
-```
-
-### POST /api/config
-保存配置文件
-```json
-{
-  "path": "/home/user/.config/",
-  "file": "settings.json",
-  "data": { ... }
-}
-```
+| 方法   | 路径            | 说明                   |
+|--------|----------------|------------------------|
+| GET    | `/api/editors` | 获取编辑器列表（含路径/类型等完整元数据） |
+| GET    | `/api/config`  | 读取配置文件 `?path=...&file=...`      |
+| POST   | `/api/config`  | 保存配置文件，Body: `{ path, file, data }` |
 
 ## License
 

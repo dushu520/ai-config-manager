@@ -3,11 +3,46 @@ import react from '@vitejs/plugin-react'
 import express from 'express'
 import cors from 'cors'
 import fs from 'fs'
+import os from 'os'
 import path from 'path'
 import { fileURLToPath } from 'url'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
+
+// WSL 检测
+function isWSL() {
+  try {
+    return fs.existsSync('/proc/sys/fs/binfmt_misc/WSLInterop') ||
+           fs.existsSync('/run/WSL') ||
+           /microsoft|WSL/i.test(fs.readFileSync('/proc/version', 'utf-8'));
+  } catch { return false; }
+}
+
+// 获取 Windows 用户名（WSL 环境）
+async function getWinUsername() {
+  try {
+    const { execSync } = await import('child_process');
+    const name = execSync('cmd.exe /C "echo %USERNAME%"', { encoding: 'utf-8', timeout: 3000 }).trim();
+    if (name && !name.includes('%')) return name;
+    throw new Error('cmd.exe failed');
+  } catch {
+    try {
+      const skip = new Set(['Public', 'Default', 'Default User', 'All Users', 'desktop.ini']);
+      const dirs = fs.readdirSync('/mnt/c/Users/', { withFileTypes: true })
+        .filter(d => d.isDirectory() && !skip.has(d.name));
+      if (dirs.length > 0) return dirs[0].name;
+    } catch {}
+    return '';
+  }
+}
+
+// 编辑器元数据（固定规则）
+const EDITOR_META = {
+  'qwen':        { pathSuffix: '.qwen',   file: 'settings.json',                        type: 'qwen' },
+  'codex':       { pathSuffix: '.codex',  authFile: 'auth.json', file: 'config.toml',   type: 'codex' },
+  'claude-code': { pathSuffix: '.claude',  file: 'settings.json',                        type: 'qwen' },
+};
 
 function parseToml(content) {
   const result = {}
@@ -93,6 +128,44 @@ export default defineConfig({
         const api = express()
         api.use(cors())
         api.use(express.json())
+
+        // 获取编辑器配置列表（动态生成完整元数据）
+        api.get('/api/editors', async (req, res) => {
+          try {
+            const editorsPath = path.join(__dirname, 'editors.json');
+            const raw = JSON.parse(fs.readFileSync(editorsPath, 'utf-8')); // { host: [name, ...] }
+
+            const home = os.homedir();
+            const wsl = isWSL();
+
+            const result = {};
+            for (const [host, names] of Object.entries(raw)) {
+              let base;
+              if (host === 'host' && wsl) {
+                const winUser = await getWinUsername();
+                base = winUser ? `/mnt/c/Users/${winUser}` : home;
+              } else {
+                base = home;
+              }
+
+              result[host] = names.map(name => {
+                const meta = EDITOR_META[name];
+                if (!meta) return null;
+                return {
+                  name,
+                  path: path.join(base, meta.pathSuffix) + '/',
+                  file: meta.file,
+                  ...(meta.authFile ? { authFile: meta.authFile } : {}),
+                  type: meta.type,
+                };
+              }).filter(Boolean);
+            }
+
+            return res.json(result);
+          } catch (error) {
+            return res.status(500).json({ error: error.message });
+          }
+        })
 
         api.get('/api/config', (req, res) => {
           const { path: configPath, file } = req.query
