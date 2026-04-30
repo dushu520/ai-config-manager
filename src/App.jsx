@@ -253,7 +253,7 @@ export default function App() {
       source = envKey.replace(/_?API_?KEY$/i, '').replace(/_/g, '-');
       if (source) source = source.charAt(0).toUpperCase() + source.slice(1);
     }
-    const name = [source, modelName].filter(Boolean).join('-');
+    const name = source ? `[${source}]${modelName}` : modelName;
     return name;
   };
 
