@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react';
-import { Settings2, Save, Check, X, Plus, Trash2, Edit3 } from 'lucide-react';
+import { Settings2, Save, Check, X, Plus, Trash2, Edit3, Play, Copy, CheckCheck } from 'lucide-react';
+import ClaudePage from './ClaudePage.jsx';
+import ClaudeDesktopPage from './ClaudeDesktopPage.jsx';
 
 const API = '/api/config';
 
@@ -84,6 +86,11 @@ export default function App() {
   const [modelFilter, setModelFilter] = useState('all');
   const [envFilter, setEnvFilter] = useState(null);
   const [deleteConfirm, setDeleteConfirm] = useState(null);
+  const [showTestModal, setShowTestModal] = useState(false);
+  const [testForm, setTestForm] = useState({ provider: 'openai', modelId: '', baseUrl: '', envKey: '', envValue: '', content: 'hello' });
+  const [copied, setCopied] = useState(false);
+  const [testRunning, setTestRunning] = useState(false);
+  const [testResult, setTestResult] = useState(null);
 
   // 加载编辑器配置
   const loadEditors = async () => {
@@ -106,9 +113,18 @@ export default function App() {
   useEffect(() => { loadEditors(); }, []);
 
   const editor = editors[host]?.find(e => e.name === editorName);
+  const isClaude = editorName === 'claude-code';
+  const isDesktop = editorName === 'claude-desktop';
+  const dedicated = isClaude || isDesktop;   // 这两个编辑器各有专用配置页
 
   const loadConfig = async () => {
     if (!editor) return;
+    // claude-code / claude-desktop 走各自的专用配置页，跳过通用加载
+    if (dedicated) {
+      setConfig({ env: {}, models: [] });
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError(null);
     setSelectedModel(null);
@@ -277,6 +293,66 @@ export default function App() {
     }));
   };
 
+  // 生成 curl 命令
+  const getCurlCommand = () => {
+    let baseUrl = (testForm.baseUrl || (testForm.provider === 'anthropic' ? 'https://api.anthropic.com' : 'https://api.openai.com/v1')).replace(/\/+$/, '');
+    if (testForm.provider !== 'anthropic' && !baseUrl.endsWith('/v1')) baseUrl += '/v1';
+    const modelId = testForm.modelId || (testForm.provider === 'anthropic' ? 'claude-3-opus-20240229' : 'gpt-4');
+    const apiKey = testForm.envValue || 'YOUR_API_KEY';
+    if (testForm.provider === 'anthropic') {
+      return `curl -X POST "${baseUrl}/v1/messages" \\
+  -H "x-api-key: ${apiKey}" \\
+  -H "anthropic-version: 2023-06-01" \\
+  -H "Content-Type: application/json" \\
+  -d '{"model": "${modelId}", "max_tokens": 1024, "messages": [{"role": "user", "content": "${testForm.content || 'hello'}"}]}'`;
+    }
+    return `curl -X POST "${baseUrl}/chat/completions" \\
+  -H "Authorization: Bearer ${apiKey}" \\
+  -H "Content-Type: application/json" \\
+  -d '{"model": "${modelId}", "messages": [{"role": "user", "content": "${testForm.content || 'hello'}"}]}'`;
+  };
+
+  // 执行测试请求（通过后端代理避免 CORS）
+  const handleRunTest = async () => {
+    setTestRunning(true);
+    setTestResult(null);
+    try {
+      let baseUrl = (testForm.baseUrl || (testForm.provider === 'anthropic' ? 'https://api.anthropic.com' : 'https://api.openai.com/v1')).replace(/\/+$/, '');
+      if (testForm.provider !== 'anthropic' && !baseUrl.endsWith('/v1')) baseUrl += '/v1';
+      const modelId = testForm.modelId || (testForm.provider === 'anthropic' ? 'claude-3-opus-20240229' : 'gpt-4');
+      const apiKey = testForm.envValue || '';
+
+      let url, headers, body;
+      if (testForm.provider === 'anthropic') {
+        url = `${baseUrl}/v1/messages`;
+        headers = {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+        };
+        body = JSON.stringify({ model: modelId, max_tokens: 1024, messages: [{ role: 'user', content: testForm.content || 'hello' }] });
+      } else {
+        url = `${baseUrl}/chat/completions`;
+        headers = {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`,
+        };
+        body = JSON.stringify({ model: modelId, messages: [{ role: 'user', content: testForm.content || 'hello' }] });
+      }
+
+      const proxyRes = await fetch('/api/test-model', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url, headers, body }),
+      });
+      const result = await proxyRes.json();
+      setTestResult(result);
+    } catch (err) {
+      setTestResult({ status: 0, statusText: 'Network Error', headers: {}, body: err.message, elapsed: 0, error: true });
+    }
+    setTestRunning(false);
+  };
+
   const envEntries = Object.entries(config.env || {});
   const modelList = getModelList();
 
@@ -290,11 +366,11 @@ export default function App() {
             </div>
             <h1 className="text-lg font-semibold text-text-primary">AI Config</h1>
           </div>
-          <button onClick={handleSave} disabled={saveStatus === 'saving'}
+          {dedicated ? null : <button onClick={handleSave} disabled={saveStatus === 'saving'}
             className={`flex items-center gap-2 px-3 py-1.5 rounded text-sm font-medium transition-all
               ${saveStatus === 'success' ? 'bg-success text-bg-primary' : saveStatus === 'error' ? 'bg-red-500 text-white' : 'bg-accent hover:bg-accent/80 text-bg-primary'}`}>
             {saveStatus === 'saving' ? '保存中...' : saveStatus === 'success' ? '✓ 已保存' : '💾 保存'}
-          </button>
+          </button>}
         </header>
 
         <div className="mb-6 text-sm text-text-secondary flex items-center gap-2 flex-wrap">
@@ -312,7 +388,8 @@ export default function App() {
           <code className="text-accent font-mono text-xs">{editor?.path}{editor?.file}</code>
         </div>
 
-        {loading ? <div className="text-text-secondary py-8 text-center">加载中...</div>
+        {dedicated ? (isClaude ? <ClaudePage editor={editor} /> : <ClaudeDesktopPage editor={editor} />)
+         : loading ? <div className="text-text-secondary py-8 text-center">加载中...</div>
          : error ? <div className="text-red-400 py-8 text-center">错误: {error}</div>
          : <>
           <section className="mb-6">
@@ -444,7 +521,10 @@ export default function App() {
                   <>
                     <div className="px-4 py-3 bg-bg-tertiary/50 border-b border-border flex items-center justify-between flex-shrink-0">
                       <h3 className="font-medium text-text-primary text-sm">模型详情</h3>
-                      <button onClick={() => setEditingModel({ ...selectedModel, name: autoGenName(selectedModel.id, selectedModel.envKey), originalId: selectedModel.id })} className="text-xs text-accent hover:text-accent/80">编辑</button>
+                      <div className="flex items-center gap-3">
+                        <button onClick={() => setEditingModel({ ...selectedModel, name: autoGenName(selectedModel.id, selectedModel.envKey), originalId: selectedModel.id })} className="text-xs text-accent hover:text-accent/80">编辑</button>
+                        <button onClick={() => { setTestForm({ provider: (selectedModel.provider === 'anthropic' ? 'anthropic' : 'openai'), modelId: selectedModel.id || '', baseUrl: selectedModel.baseUrl || '', envKey: selectedModel.envKey || '', envValue: (selectedModel.envKey && config.env[selectedModel.envKey]) || '', content: 'hello' }); setShowTestModal(true); }} className="flex items-center gap-1 text-xs text-success hover:text-success/80"><Play className="w-3 h-3" /> 测试模型</button>
+                      </div>
                     </div>
                     <div className="p-4 space-y-2 flex-1 overflow-y-auto">
                       <div className="grid grid-cols-2 gap-2 text-sm">
@@ -461,6 +541,116 @@ export default function App() {
             </div>
           </section>
         </>}
+
+        {showTestModal && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+            <div className="bg-bg-secondary border border-border rounded-lg p-5 w-full mx-4 animate-fade-in" style={{ maxWidth: '56rem' }}>
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-base font-medium text-text-primary">测试模型</h3>
+                <button onClick={() => { setShowTestModal(false); setCopied(false); setTestResult(null); }} className="text-text-secondary hover:text-text-primary"><X className="w-5 h-5" /></button>
+              </div>
+
+              <div className="flex gap-4">
+                {/* 左侧：表单 + curl */}
+                <div className="w-1/2" style={{ minWidth: 0 }}>
+                  <div className="space-y-2.5 mb-3">
+                    <div>
+                      <label className="block text-xs text-text-secondary mb-1">Provider / 模型 ID</label>
+                      <div className="flex items-center gap-2">
+                        <label className="flex items-center gap-1 text-xs text-text-primary cursor-pointer">
+                          <input type="radio" name="testProvider" value="openai" checked={testForm.provider === 'openai'}
+                            onChange={() => setTestForm(p => ({ ...p, provider: 'openai' }))}
+                            className="text-accent" /> OpenAI
+                        </label>
+                        <label className="flex items-center gap-1 text-xs text-text-primary cursor-pointer">
+                          <input type="radio" name="testProvider" value="anthropic" checked={testForm.provider === 'anthropic'}
+                            onChange={() => setTestForm(p => ({ ...p, provider: 'anthropic' }))}
+                            className="text-accent" /> Anthropic
+                        </label>
+                        <input type="text" value={testForm.modelId} onChange={e => setTestForm(p => ({ ...p, modelId: e.target.value }))}
+                          className="flex-1 bg-bg-primary border border-border rounded px-2 py-1 text-xs font-mono text-text-primary" />
+                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      <div style={{flex: 6}}>
+                        <label className="block text-xs text-text-secondary mb-1">Base URL</label>
+                        <input type="text" value={testForm.baseUrl} onChange={e => setTestForm(p => ({ ...p, baseUrl: e.target.value }))}
+                          className="w-full bg-bg-primary border border-border rounded px-2 py-1 text-xs font-mono text-accent" />
+                      </div>
+                      <div style={{flex: 4}}>
+                        <label className="block text-xs text-text-secondary mb-1">密钥</label>
+                        <select value={testForm.envKey} onChange={e => {
+                          const key = e.target.value;
+                          const value = key ? (config.env[key] || '') : '';
+                          setTestForm(p => ({ ...p, envKey: key, envValue: value }));
+                        }}
+                          className="w-full bg-bg-primary border border-border rounded px-2 py-1 text-xs font-mono text-warning">
+                          <option value="">-- 选择 --</option>
+                          {envEntries.map(([key]) => <option key={key} value={key}>{key}</option>)}
+                        </select>
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-xs text-text-secondary mb-1">密钥值</label>
+                      <input type="text" value={testForm.envValue} onChange={e => setTestForm(p => ({ ...p, envValue: e.target.value }))}
+                        placeholder={testForm.envKey ? '$' + testForm.envKey : ''}
+                        className="w-full bg-bg-primary border border-border rounded px-2 py-1 text-xs font-mono text-text-primary" />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-text-secondary mb-1">测试内容</label>
+                      <input type="text" value={testForm.content} onChange={e => setTestForm(p => ({ ...p, content: e.target.value }))}
+                        className="w-full bg-bg-primary border border-border rounded px-2 py-1 text-xs font-mono text-text-primary" />
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-xs text-text-secondary">curl 测试指令</span>
+                      <div className="flex items-center gap-1">
+                        <button onClick={() => {
+                          navigator.clipboard.writeText(getCurlCommand());
+                          setCopied(true);
+                          setTimeout(() => setCopied(false), 2000);
+                        }} className={`flex items-center gap-1 text-xs px-1.5 py-0.5 rounded transition-colors ${copied ? 'bg-success text-bg-primary' : 'bg-bg-tertiary text-text-secondary hover:text-text-primary'}`}>
+                          {copied ? <><CheckCheck className="w-3 h-3" /> 已复制</> : <><Copy className="w-3 h-3" /> 复制</>}
+                        </button>
+                        <button onClick={handleRunTest} disabled={testRunning}
+                          className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded bg-accent text-bg-primary hover:bg-accent/80 disabled:opacity-50 transition-colors">
+                          <Play className="w-3 h-3" /> {testRunning ? '请求中...' : '运行'}
+                        </button>
+                      </div>
+                    </div>
+                    <pre className="bg-bg-primary border border-border rounded-lg p-3 overflow-x-auto text-xs font-mono text-text-primary whitespace-pre-wrap break-all" style={{ maxHeight: '11rem' }}>
+                      {getCurlCommand()}
+                    </pre>
+                  </div>
+                </div>
+
+                {/* 右侧：响应结果 */}
+                <div className="w-1/2 border-l border-border pl-4 flex flex-col overflow-hidden" style={{ minWidth: 0 }}>
+                  {testRunning ? (
+                    <div className="flex-1 flex items-center justify-center text-text-secondary text-xs">请求中...</div>
+                  ) : testResult ? (
+                    <>
+                      <div className="flex items-center gap-2 mb-2 flex-shrink-0">
+                        <span className="text-xs text-text-secondary">响应</span>
+                        <span className={`text-xs font-mono px-1.5 py-0.5 rounded ${testResult.error || testResult.status >= 400 ? 'bg-red-500/20 text-red-400' : 'bg-success/20 text-success'}`}>
+                          {testResult.status} {testResult.statusText}
+                        </span>
+                        <span className="text-xs text-text-secondary/50">{testResult.elapsed}ms</span>
+                      </div>
+                      <pre className="bg-bg-primary border border-border rounded-lg p-3 overflow-auto text-xs font-mono text-text-primary whitespace-pre-wrap break-all" style={{ height: "450px", maxHeight: "450px" }}>
+                        {testResult.body}
+                      </pre>
+                    </>
+                  ) : (
+                    <div className="flex-1 flex items-center justify-center text-text-secondary/40 text-xs">点击"运行"查看响应</div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         {deleteConfirm && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">

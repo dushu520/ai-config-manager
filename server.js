@@ -22,7 +22,8 @@ app.use(express.static(path.join(__dirname, 'dist')));
 const EDITOR_META = {
   'qwen':        { pathSuffix: '.qwen',   file: 'settings.json',                        type: 'qwen' },
   'codex':       { pathSuffix: '.codex',  authFile: 'auth.json', file: 'config.toml',   type: 'codex' },
-  'claude-code': { pathSuffix: '.claude',  file: 'settings.json',                        type: 'qwen' },
+  'claude-code': { pathSuffix: '.claude',  file: 'settings.json',                        type: 'claude' },
+  'claude-desktop': { pathSuffix: 'AppData/Local/Claude-3p/configLibrary', file: '00000000-0000-4000-8000-000000157210.json', type: 'claude-desktop', pickJson: true },
 };
 
 // WSL 检测
@@ -34,23 +35,73 @@ function isWSL() {
   } catch { return false; }
 }
 
-// 获取 Windows 用户名（WSL 环境）
+// 解析 Windows 用户名（WSL 环境）：显式覆盖 > cmd.exe 互通 > 目录扫描兜底
 async function getWinUsername() {
-  try {
-    const { execSync } = await import('child_process');
-    const name = execSync('cmd.exe /C "echo %USERNAME%"', { encoding: 'utf-8', timeout: 3000 }).trim();
-    if (name && !name.includes('%')) return name;
-    throw new Error('cmd.exe failed');
-  } catch {
-    // 回退：扫描 /mnt/c/Users/ 下非系统目录
+  const override = process.env.AICM_WIN_USER;
+  if (override) return override;
+  const { execSync } = await import('child_process');
+  const probes = ['cmd.exe /C "echo %USERNAME%"', '/mnt/c/Windows/System32/cmd.exe /C "echo %USERNAME%"'];
+  for (const cmd of probes) {
     try {
-      const skip = new Set(['Public', 'Default', 'Default User', 'All Users', 'desktop.ini']);
-      const dirs = fs.readdirSync('/mnt/c/Users/', { withFileTypes: true })
-        .filter(d => d.isDirectory() && !skip.has(d.name));
-      if (dirs.length > 0) return dirs[0].name;
-    } catch {}
-    return '';
+      const name = execSync(cmd, { encoding: 'utf-8', timeout: 3000 }).trim();
+      if (name && !name.includes('%') && !name.includes('not found') && !name.includes('No such')) return name;
+    } catch (e) { /* 继续下一个探测方式 */ }
   }
+  return '';
+}
+
+// 解析编辑器实际配置文件名：claude-desktop 的文件名含安装 UUID，
+// 默认文件不存在时在该目录里挑最新的 UUID 形 json 兜底（跳过 _meta.json 之类）
+function resolveEditorFile(base, meta) {
+  if (!meta.pickJson) return meta.file;
+  const dir = path.join(base, meta.pathSuffix);
+  try {
+    if (fs.existsSync(path.join(dir, meta.file))) return meta.file;
+    const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}[.]json$/i;
+    const cands = fs.readdirSync(dir).filter(f => uuidRe.test(f))
+      .map(f => ({ f: f, t: fs.statSync(path.join(dir, f)).mtimeMs }))
+      .sort((a, b) => b.t - a.t);
+    if (cands.length) return cands[0].f;
+  } catch (e) { /* 回退默认文件名 */ }
+  return meta.file;
+}
+
+// /mnt/c/Users 下的候选用户目录（跳过系统目录）
+function winUserDirs() {
+  const skip = new Set(['Public', 'Default', 'Default User', 'All Users', 'desktop.ini']);
+  try {
+    return fs.readdirSync('/mnt/c/Users', { withFileTypes: true })
+      .filter(d => d.isDirectory() && !skip.has(d.name))
+      .map(d => d.name);
+  } catch (e) { return []; }
+}
+
+// 兜底选择 Windows 用户：优先确实存在该工具目录的用户（取最近修改者），
+// 其次存在任一工具目录的用户，最后才取第一个候选目录
+function pickWinUser(preferDir) {
+  const dirs = winUserDirs();
+  if (dirs.length === 0) return '';
+  const known = ['.claude', '.codex', '.qwen', 'AppData/Local/Claude-3p'];
+  const mtime = (user, dir) => {
+    try { return fs.statSync('/mnt/c/Users/' + user + '/' + dir).mtimeMs; } catch (e) { return -1; }
+  };
+  if (preferDir) {
+    const hit = dirs.map(n => ({ n, t: mtime(n, preferDir) })).filter(x => x.t >= 0).sort((a, b) => b.t - a.t);
+    if (hit.length) return hit[0].n;
+  }
+  const any = dirs.map(n => ({ n, t: Math.max.apply(null, known.map(d => mtime(n, d))) }))
+    .filter(x => x.t >= 0).sort((a, b) => b.t - a.t);
+  if (any.length) return any[0].n;
+  return dirs[0];
+}
+
+// host（Windows 侧）的实际基础目录
+async function resolveHostBase(preferDir) {
+  if (!isWSL()) return os.homedir();
+  const winUser = await getWinUsername();
+  if (winUser) return '/mnt/c/Users/' + winUser;
+  const picked = pickWinUser(preferDir);
+  return picked ? '/mnt/c/Users/' + picked : os.homedir();
 }
 
 // ============ API ============
@@ -66,25 +117,20 @@ app.get('/api/editors', async (req, res) => {
 
     const result = {};
     for (const [host, names] of Object.entries(raw)) {
-      let base;
-      if (host === 'host' && wsl) {
-        const winUser = await getWinUsername();
-        base = winUser ? `/mnt/c/Users/${winUser}` : home;
-      } else {
-        base = home;
-      }
-
-      result[host] = names.map(name => {
+      const list = [];
+      for (const name of names) {
         const meta = EDITOR_META[name];
-        if (!meta) return null;
-        return {
+        if (!meta) continue;
+        const base = host === 'host' && wsl ? await resolveHostBase(meta.pathSuffix) : home;
+        list.push({
           name,
           path: path.join(base, meta.pathSuffix) + '/',
-          file: meta.file,
+          file: resolveEditorFile(base, meta),
           ...(meta.authFile ? { authFile: meta.authFile } : {}),
           type: meta.type,
-        };
-      }).filter(Boolean);
+        });
+      }
+      result[host] = list;
     }
 
     return res.json(result);
@@ -92,6 +138,56 @@ app.get('/api/editors', async (req, res) => {
     return res.status(500).json({ error: error.message });
   }
 });
+
+
+  // 获取模型列表（双协议探测：OpenAI Bearer / Anthropic x-api-key，避免浏览器 CORS）
+  app.get('/api/models', async (req, res) => {
+    const { baseUrl, key } = req.query;
+    if (!baseUrl) return res.status(400).json({ error: '缺少 baseUrl' });
+    const base = String(baseUrl).replace(/\/+$/, '');
+    const url = base.endsWith('/v1') ? base + '/models' : base + '/v1/models';
+    const keyStr = key ? String(key) : '';
+    // 单协议尝试，解析 OpenAI / Anthropic / 纯数组等多种响应格式
+    const attempt = async (headers) => {
+      try {
+        const response = await fetch(url, { headers: Object.assign({ 'Content-Type': 'application/json' }, headers) });
+        const text = await response.text();
+        if (!response.ok) return { error: 'HTTP ' + response.status + ': ' + text.slice(0, 200) };
+        let data;
+        try { data = JSON.parse(text); } catch (e) { return { error: '响应非 JSON: ' + text.slice(0, 120) }; }
+        let items = [];
+        if (Array.isArray(data && data.data)) items = data.data;
+        else if (Array.isArray(data)) items = data;
+        else if (data && Array.isArray(data.models)) items = data.models;
+        const list = items
+          .map(m => typeof m === 'string' ? { id: m, name: '' } : { id: (m && (m.id || m.name)) || '', name: (m && (m.display_name || m.name)) || '' })
+          .filter(m => m.id);
+        return { items: list };
+      } catch (err) {
+        return { error: err.message };
+      }
+    };
+    // 分别以两种协议请求：Bearer 走 OpenAI 分支，x-api-key 走 Anthropic 分支
+    const [oa, an] = await Promise.all([
+      attempt(keyStr ? { 'Authorization': 'Bearer ' + keyStr } : {}),
+      attempt(keyStr ? { 'x-api-key': keyStr, 'anthropic-version': '2023-06-01' } : {}),
+    ]);
+    const openai = (oa && oa.items) || [];
+    const seen = new Set(openai.map(m => m.id));
+    const anthropic = ((an && an.items) || []).filter(m => !seen.has(m.id));
+    const merged = openai.concat(anthropic);
+    if (merged.length === 0) {
+      const parts = [];
+      if (oa && oa.error) parts.push('OpenAI协议: ' + oa.error);
+      if (an && an.error) parts.push('Anthropic协议: ' + an.error);
+      return res.status(502).json({ error: parts.join('；') || '上游未返回任何模型' });
+    }
+    return res.json({
+      models: merged.map(m => m.id),
+      openai: openai.map(m => m.id),
+      anthropic: anthropic.map(m => ({ id: m.id, name: m.name })),
+    });
+  });
 
 // 读取配置文件
 app.get('/api/config', (req, res) => {
@@ -218,6 +314,47 @@ function stringifyValue(value) {
 // SPA 路由
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+});
+
+// 代理测试请求（避免浏览器 CORS 限制）
+app.post('/api/test-model', async (req, res) => {
+  const { url, headers, body } = req.body;
+  if (!url) return res.status(400).json({ error: '缺少 url' });
+
+  const startTime = Date.now();
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: headers || {},
+      body: body || '',
+    });
+    const elapsed = Date.now() - startTime;
+
+    let resBody = await response.text();
+    // 尝试格式化 JSON
+    try {
+      resBody = JSON.stringify(JSON.parse(resBody), null, 2);
+    } catch {}
+
+    return res.json({
+      status: response.status,
+      statusText: response.statusText,
+      headers: Object.fromEntries(response.headers.entries()),
+      body: resBody,
+      elapsed,
+      error: false,
+    });
+  } catch (err) {
+    const elapsed = Date.now() - startTime;
+    return res.json({
+      status: 0,
+      statusText: 'Network Error',
+      headers: {},
+      body: err.message,
+      elapsed,
+      error: true,
+    });
+  }
 });
 
 app.listen(PORT, () => {
